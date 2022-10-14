@@ -13,9 +13,9 @@ parser.add_argument("--dataset-format", type=str, default='kitti_raw', choices=[
 parser.add_argument("--static-frames", default=None, type=Path,
                     help="list of imgs to discard for being static, if not set will discard them based on speed \
                     (careful, on KITTI some frames have incorrect speed)")
-parser.add_argument("--with-depth", action='store_false',
+parser.add_argument("--with-depth", action='store_true',
                     help="If available (e.g. with KITTI), will store depth ground truth along with images, for validation")
-parser.add_argument("--with-pose", action='store_false',
+parser.add_argument("--with-pose", action='store_true',
                     help="If available (e.g. with KITTI), will store pose ground truth along with images, for validation")
 parser.add_argument("--no-train-gt", action='store_true',
                     help="If selected, will delete ground truth depth to save space")
@@ -30,7 +30,7 @@ args = parser.parse_args()
 # with open("config/kitti_config.yaml", "r") as yamlfile:
 #     data = yaml.load(yamlfile, Loader=yaml.FullLoader)
 
-dataset_path = '/home/aniket/WPI/DR_3DOD/kitti_raw'
+# dataset_path = '/home/aniket/WPI/DR_3DOD/kitti_raw'
 
 def main():
     global data_loader
@@ -38,10 +38,10 @@ def main():
     from kitti_raw_loader import KittiRawLoader
     data_loader = KittiRawLoader(args.dataset_dir,
                                     static_frames_file=None,
-                                    img_height=128,
-                                    img_width=416,
-                                    get_depth=True,
-                                    get_pose=True,
+                                    img_height=args.height,
+                                    img_width=args.width,
+                                    get_depth=args.with_depth,
+                                    get_pose=args.with_pose,
                                     depth_size_ratio=1)
 
     n_scenes = len(data_loader.scenes)
@@ -58,6 +58,25 @@ def main():
             # except KeyboardInterrupt as e:
             #     tasks.cancel()
             #     raise e
+    
+    print('Generate Train-Val lists')
+    np.random.seed(1234)
+    subdirs = args.dump_root.dirs()
+    canonic_prefixes = set([subdir.basename()[:-2] for subdir in subdirs])
+    with open(args.dump_root / 'train.txt', 'w') as tf:
+        with open(args.dump_root / 'val.txt', 'w') as vf:
+            for pr in tqdm(canonic_prefixes):
+                corresponding_dirs = args.dump_root.dirs('{}*'.format(pr))
+                if np.random.random() < 0.1:
+                    for s in corresponding_dirs:
+                        vf.write('{}\n'.format(s.name))
+                else:
+                    for s in corresponding_dirs:
+                        tf.write('{}\n'.format(s.name))
+                        if args.with_depth and args.no_train_gt:
+                            for gt_file in s.files('*.npy'):
+                                gt_file.remove_p()
+
 
 def dump_example(args, scene):
     scene_list = data_loader.collect_scenes(scene)
