@@ -6,6 +6,7 @@
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from torch.nn.init import xavier_uniform_, zeros_
 
 # Checks if cuda can be used otherwwise uses cpu
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -123,7 +124,7 @@ class DispNetS(nn.Module):
         out_iconv4 = self.iconv4(concat4)
         disp4 = self.alpha * self.predict_disp4(out_iconv4) + self.beta
 
-        out_upconv3 = crop_like(self.upconv3(out_conv4), out_conv2)
+        out_upconv3 = crop_like(self.upconv3(out_iconv4), out_conv2)
         disp4_up = crop_like(F.interpolate(disp4, scale_factor=2, mode='bilinear', align_corners=False), out_conv2)
         concat3 = torch.cat((out_upconv3, out_conv2, disp4_up), 1)
         out_iconv3 = self.iconv3(concat3)
@@ -141,7 +142,17 @@ class DispNetS(nn.Module):
         out_iconv1 = self.iconv1(concat1)
         disp1 = self.alpha * self.predict_disp1(out_iconv1) + self.beta
 
-        return disp1
+        if self.training:
+            return disp1, disp2, disp3, disp4
+        else:
+            return disp1
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+                xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    zeros_(m.bias)
 
 
 # if __name__ == '__main__':

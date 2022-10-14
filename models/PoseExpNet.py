@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch import sigmoid
+from torch.nn.init import xavier_uniform_, zeros_
 
 def conv(in_planes, out_planes, kernel_size=3):
     '''
@@ -91,6 +92,13 @@ class PoseExpNet(nn.Module):
             return [exp_mask1, exp_mask2, exp_mask3, exp_mask4], pose
         else:
             return exp_mask1, pose
+    
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+                xavier_uniform_(m.weight.data)
+                if m.bias is not None:
+                    zeros_(m.bias)
 
 # if __name__ == '__main__':
 #     expnet = PoseExpNet(3, True)
