@@ -1,5 +1,3 @@
-from loss_functions import smooth_loss, explainability_loss, photometric_reconstruction_loss
-from logger import AverageMeter
 import torch
 import time
 import argparse
@@ -11,6 +9,8 @@ import torch.nn
 from datasets.sequence_folders import SequenceFolder
 import custom_transforms as cust_trans
 import models
+from loss_functions import smooth_loss, explainability_loss, photometric_reconstruction_loss
+from logger import AverageMeter
 # import models.DispNetS as DispNetS
 # import models.PoseExpNet as PoseExpNet
 
@@ -154,11 +154,12 @@ def main():
     for epoch in range(args.epochs):
         print("Epoch :", epoch)
 
-        train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size)
+        train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, epoch)
 
-        error, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch)
+        errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch)
+        # error, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch)
 
-def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size):
+def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epoch):
     losses = AverageMeter(precision=4)
     w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
     
@@ -201,7 +202,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size):
         batch_time = time.time() - end
         end = time.time()
 
-        print("Train: Time: {}, Loss: {}".format(batch_time, loss.item()))
+        print("Train: Epoch: {} Time: {}, Loss: {}".format(epoch, batch_time, loss.item()))
 
     return losses.avg[0]
         
@@ -221,9 +222,60 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, sample_
     disp_net.eval()
     pose_exp_net.eval()
 
+    for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(val_loader):
+        tgt_img = tgt_img.to(device)
+        ref_imgs = [img.to(device) for img in ref_imgs]
+        intrinsics = intrinsics.to(device)
+        intrinsics_inv = intrinsics_inv.to(device)
+
+        disp = disp_net(tgt_img)
+        depth = 1/disp
+        explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
+
+        loss1 = 0
+        loss2 = explainability_loss(explainability_mask).item()
+        loss3 = smooth_loss(depth).item()
+
+        loss = w1*loss1 + w2*loss2 + w3*loss3
+        losses.update([loss, loss1, loss2])
+
+        print('valid: Time {} Loss {}'.format(batch_time, losses))
+
+    return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss']
+
 @torch.no_grad()
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, sample_nb_to_log=3):
-    pass
+    global device
+    depth_error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
+    depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
+    pose_error_names = ['ATE', 'RTE']
+    pose_errors = AverageMeter(i=2, precision=4)
+
+    disp_net.eval()
+    pose_exp_net.eval()
+
+    print("Validate with GT, pose.. val: ", len(val_loader))
+
+    for i, (tgt_img, ref_imgs, gt_depth, gt_poses) in enumerate(val_loader):
+        tgt_img = tgt_img.to(device)
+        gt_depth = gt_depth.to(device)
+        gt_poses = gt_poses.to(device)
+        ref_imgs = [img.to(device) for img in ref_imgs]
+        b = tgt_img.shape[0]
+
+        # Compute Output
+        output_disp = disp_net(tgt_img)
+        output_depth = 1/output_disp
+        explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
+
+
+        print("reordered output poses: ", output_poses[:, :gt_poses.shape[1]//2])
+        print("Size of output_pose: ", output_poses.size(), gt_poses.size())
+
+    print("Return validation output")
+    return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
+
+
 
 if __name__ == '__main__':
     main()
