@@ -37,7 +37,7 @@ def main():
 
     from kitti_raw_loader import KittiRawLoader
     data_loader = KittiRawLoader(args.dataset_dir,
-                                    static_frames_file=None,
+                                    static_frames_file=args.static_frames,
                                     img_height=args.height,
                                     img_width=args.width,
                                     get_depth=args.with_depth,
@@ -46,6 +46,7 @@ def main():
 
     n_scenes = len(data_loader.scenes)
     print('Found {} potential scenes'.format(n_scenes))
+    print(data_loader.scenes)
     if args.num_threads == 1:
         for scene in tqdm(data_loader.scenes):
             dump_example(args, scene)
@@ -67,7 +68,7 @@ def main():
         with open(args.dump_root / 'val.txt', 'w') as vf:
             for pr in tqdm(canonic_prefixes):
                 corresponding_dirs = args.dump_root.dirs('{}*'.format(pr))
-                if np.random.random() < 0.1:
+                if np.random.random() < 0.3:
                     for s in corresponding_dirs:
                         vf.write('{}\n'.format(s.name))
                 else:
