@@ -6,13 +6,15 @@ import torch.optim
 import torch.utils.data
 import torch.nn
 
-from datasets.sequence_folders import SequenceFolder
+from datasets.sequence_folders import SequenceFolder, ValidationSetWithPose
 import custom_transforms as cust_trans
 import models
+from utils import save_checkpoint, save_path_formatter, log_output_tensorboard, tensor2array
 from loss_functions import smooth_loss, explainability_loss, photometric_reconstruction_loss
 from logger import AverageMeter
 # import models.DispNetS as DispNetS
 # import models.PoseExpNet as PoseExpNet
+from tensorboardX import SummaryWriter
 
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -74,14 +76,25 @@ parser.add_argument('-s', '--smooth-loss-weight', type=float, help='weight for d
 
 if torch.cuda.is_available(): device = torch.device("cuda")
 else: device = torch.device("cpu")
+best_error = -1
+n_iter = 0
 
 def main():
     ## SETUP
-    global device
+    global device, best_error, n_iter
     args = parser.parse_args()
     torch.manual_seed(args.seed)
     # if args.evaluate:
     #     args.epochs = 0
+
+    ## Save_Path for checkpoints
+    save_path = save_path_formatter(args, parser)
+    args.save_path = 'checkpoints'/save_path
+    print('Checkpoints will be saved to save_path: {}'.format(args.save_path))
+    args.save_path.makedirs_p()
+
+    ## TensorBoard Writer
+    tb_writer = SummaryWriter(args.save_path)
 
     normalize = cust_trans.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     train_transform = cust_trans.Compose([
@@ -102,12 +115,17 @@ def main():
         train=True,
         sequence_length=args.sequence_length
     )
-    val_set = SequenceFolder(                   ## Check other conditions like when GT is available
+    # val_set = SequenceFolder(                   ## Check other conditions like when GT is available
+    #     args.data,
+    #     transform=valid_transform,
+    #     seed=args.seed,
+    #     train=False,
+    #     sequence_length=args.sequence_length,
+    # )
+    val_set = val_set = ValidationSetWithPose(
         args.data,
-        transform=valid_transform,
-        seed=args.seed,
-        train=False,
         sequence_length=args.sequence_length,
+        transform=valid_transform
     )
 
     print('{} samples found in {} train scenes'.format(len(train_set), len(train_set.scenes)))
@@ -126,6 +144,7 @@ def main():
 
     # Create Models - DispNetS and PoseExpNet
     disp_net = models.DispNetS().to(device)
+    # pose_exp_net = models.PoseExpNet(nb_ref_imgs=args.sequence_length - 1, output_exp = False).to(device)
     pose_exp_net = models.PoseExpNet(nb_ref_imgs=args.sequence_length - 1, output_exp = args.mask_loss_weight > 0).to(device)
 
     # Weights Initialization
@@ -151,15 +170,43 @@ def main():
         weight_decay=args.weight_decay
     )
 
+    if args.evaluate:
+        errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, 0, tb_writer)
+        for error, name in zip(errors, error_names):
+            tb_writer.add_scalar(name, error, 0)
+
     for epoch in range(args.epochs):
         print("Epoch :", epoch)
 
-        train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, epoch)
+        train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, epoch, tb_writer)
 
-        errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch)
-        # error, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch)
+        # errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
+        errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
 
-def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epoch):
+        for error, name in zip(errors, error_names):
+            tb_writer.add_scalar(name, error, epoch)
+        
+        decisive_error = errors[1]      # Choose which error measures model performance
+        if best_error < 0:
+            best_error = decisive_error
+
+        is_best = decisive_error < best_error
+        best_error = min(best_error, decisive_error)
+        save_checkpoint(
+            args.save_path,
+            {
+                'epoch': epoch + 1,
+                'state_dict': disp_net.module.state_dict()
+            },
+            {
+                'epoch': epoch + 1,
+                'state_dict': pose_exp_net.module.state_dict()
+            },
+            is_best
+        )
+
+def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epoch, tb_writer):
+    global device, n_iter
     losses = AverageMeter(precision=4)
     w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
     
@@ -170,8 +217,10 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
     end = time.time()
     avg_loss = 0
 
-    ## FOR OOP HERE over train_loader
-    for i, (tgt_img, ref_imgs, intrinsics, intrinsics_inv) in enumerate(train_loader):
+    ## FOR LOOP HERE over train_loader
+    for i, (tgt_img, ref_imgs, intrinsics, _) in enumerate(train_loader):
+        log_losses = i > 0 and n_iter % args.print_freq == 0
+        log_output = args.training_output_freq > 0 and n_iter % args.training_output_freq == 0
         
         tgt_img = tgt_img.to(device)
         ref_imgs = [img.to(device) for img in ref_imgs]
@@ -188,13 +237,29 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, pose,
                                                                args.rotation_mode, args.padding_mode)
-        loss_2 = explainability_loss(explainability_mask)
+        if w2 > 0:
+            loss_2 = explainability_loss(explainability_mask)
+        else:
+            loss_2 = 0
         loss_3 = smooth_loss(depth)
 
         loss = w1*loss_1 + w2*loss_2 + w3*loss_3
 
+        if log_losses:
+            tb_writer.add_scalar('photometric_error', loss_1.item(), n_iter)
+            if w2 > 0:
+                tb_writer.add_scalar('explanability_loss', loss_2.item(), n_iter)
+            tb_writer.add_scalar('disparity_smoothness_loss', loss_3.item(), n_iter)
+            tb_writer.add_scalar('total_loss', loss.item(), n_iter)
+
+        if log_output:
+            tb_writer.add_image('train Input', tensor2array(tgt_img[0]), n_iter)
+            for k, scaled_maps in enumerate(zip(depth, disparities, warped, diff, explainability_mask)):
+                log_output_tensorboard(tb_writer, "train", 0, " {}".format(k), n_iter, *scaled_maps)
+
         losses.update(loss.item(), args.batch_size)
 
+        # Gradient compute and Adam step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -202,13 +267,16 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         batch_time = time.time() - end
         end = time.time()
 
-        print("Train: Epoch: {} Time: {}, Loss: {}".format(epoch, batch_time, loss.item()))
+        print("Training Epoch: {} Time: {}, Loss: {}".format(epoch, batch_time, loss.item()))
 
+        if i >= epoch_size - 1:
+            break
+        n_iter += 1
     return losses.avg[0]
-        
+
 
 @torch.no_grad()    # Avoids gradient updation (backward pass is skipped during evaluation)
-def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, sample_nb_to_log=3):
+def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
     batch_time = AverageMeter()
     losses = AverageMeter(i=3, precision=4)
@@ -232,7 +300,10 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, sample_
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
-        loss1 = 0
+        loss1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
+                                                               intrinsics, depth,
+                                                               explainability_mask, pose,
+                                                               args.rotation_mode, args.padding_mode)
         loss2 = explainability_loss(explainability_mask).item()
         loss3 = smooth_loss(depth).item()
 
@@ -244,7 +315,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, sample_
     return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss']
 
 @torch.no_grad()
-def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, sample_nb_to_log=3):
+def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
     depth_error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
@@ -267,7 +338,6 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, sampl
         output_disp = disp_net(tgt_img)
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
-
 
         print("reordered output poses: ", output_poses[:, :gt_poses.shape[1]//2])
         print("Size of output_pose: ", output_poses.size(), gt_poses.size())
