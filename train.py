@@ -9,6 +9,8 @@ import torch.nn
 from datasets.sequence_folders import SequenceFolder, ValidationSetWithPose
 import custom_transforms as cust_trans
 import models
+import csv
+import numpy as np
 from utils import save_checkpoint, save_path_formatter, log_output_tensorboard, tensor2array
 from loss_functions import smooth_loss, explainability_loss, photometric_reconstruction_loss
 from logger import AverageMeter
@@ -31,11 +33,11 @@ parser.add_argument('--padding-mode', type=str, choices=['zeros', 'border'], def
                     help='padding mode for image warping : this is important for photometric differenciation when going outside target image.'
                          ' zeros will null gradients outside target image.'
                          ' border will only null gradients of the coordinate outside (x or y)')
-# parser.add_argument('--with-gt', action='store_true', help='use depth ground truth for validation. '
-#                     'You need to store it in npy 2D arrays see data/kitti_raw_loader.py for an example')
-# parser.add_argument('--with-pose', action='store_true', help='use pose ground truth for validation. '
-#                     'You need to store it in text files of 12 columns see data/kitti_raw_loader.py for an example '
-#                     'Note that for kitti, it is recommend to use odometry train set to test pose')
+parser.add_argument('--with-gt', action='store_true', help='use depth ground truth for validation. '
+                    'You need to store it in npy 2D arrays see data/kitti_raw_loader.py for an example')
+parser.add_argument('--with-pose', action='store_true', help='use pose ground truth for validation. '
+                    'You need to store it in text files of 12 columns see data/kitti_raw_loader.py for an example '
+                    'Note that for kitti, it is recommend to use odometry train set to test pose')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',         #
@@ -115,18 +117,21 @@ def main():
         train=True,
         sequence_length=args.sequence_length
     )
-    # val_set = SequenceFolder(                   ## Check other conditions like when GT is available
-    #     args.data,
-    #     transform=valid_transform,
-    #     seed=args.seed,
-    #     train=False,
-    #     sequence_length=args.sequence_length,
-    # )
-    val_set = val_set = ValidationSetWithPose(
-        args.data,
-        sequence_length=args.sequence_length,
-        transform=valid_transform
-    )
+
+    if args.with_pose and args.with_gt:
+        val_set = val_set = ValidationSetWithPose(
+            args.data,
+            sequence_length=args.sequence_length,
+            transform=valid_transform
+        )
+    else:
+        val_set = SequenceFolder(                   ## Check other conditions like when GT is available
+            args.data,
+            transform=valid_transform,
+            seed=args.seed,
+            train=False,
+            sequence_length=args.sequence_length,
+        )
 
     print('{} samples found in {} train scenes'.format(len(train_set), len(train_set.scenes)))
     print('{} samples found in {} valid scenes'.format(len(val_set), len(val_set.scenes)))
@@ -170,8 +175,15 @@ def main():
         weight_decay=args.weight_decay
     )
 
+    with open(args.save_path/args.log_full, 'w') as csvfile:
+        writer = csv.writer(csvfile, delimiter='\t')
+        writer.writerow(['train_loss', 'photo_loss', 'explainability_loss', 'smooth_loss'])
+
     if args.evaluate:
-        errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, 0, tb_writer)
+        if args.with_gt and args.with_pose:
+            errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, 0, tb_writer)
+        else:
+            errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, 0, tb_writer)
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, 0)
 
@@ -181,7 +193,10 @@ def main():
         train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, epoch, tb_writer)
 
         # errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
-        errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
+        if args.with_gt and args.with_pose:
+            errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
+        else:
+            errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
 
         for error, name in zip(errors, error_names):
             tb_writer.add_scalar(name, error, epoch)
@@ -268,7 +283,9 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         end = time.time()
 
         print("Training Epoch: {} Time: {}, Loss: {}".format(epoch, batch_time, loss.item()))
-
+        with open(args.save_path/args.log_full, 'a') as csvfile:
+            writer = csv.writer(csvfile, delimiter='\t')
+            writer.writerow([loss.item(), loss_1.item(), loss_2.item() if w2 > 0 else 0, loss_3.item()])
         if i >= epoch_size - 1:
             break
         n_iter += 1
@@ -278,11 +295,17 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
 @torch.no_grad()    # Avoids gradient updation (backward pass is skipped during evaluation)
 def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
+    print("Validating without GT")
     batch_time = AverageMeter()
     losses = AverageMeter(i=3, precision=4)
 
-
+    log_outputs = sample_nb_to_log > 0
+    # Output the logs throughout the whole dataset
+    batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
+    
     w1, w2, w3 = args.photo_loss_weight, args.mask_loss_weight, args.smooth_loss_weight
+    poses = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
+    disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
 
     
@@ -307,11 +330,29 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
         loss2 = explainability_loss(explainability_mask).item()
         loss3 = smooth_loss(depth).item()
 
+        if log_outputs and i in batches_to_log:  # log first output of wanted batches
+            index = batches_to_log.index(i)
+            if epoch == 0:
+                for j, ref in enumerate(ref_imgs):
+                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
+                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
+
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, 1./disp, disp, warped[0], diff[0], explainability_mask)
+
+        if log_outputs and i < len(val_loader)-1:
+            step = args.batch_size*(args.sequence_length-1)
+            poses[i * step:(i+1) * step] = pose.cpu().view(-1, 6).numpy()
+            step = args.batch_size * 3
+            disp_unraveled = disp.cpu().view(args.batch_size, -1)
+            disp_values[i * step:(i+1) * step] = torch.cat([disp_unraveled.min(-1)[0],
+                                                            disp_unraveled.median(-1)[0],
+                                                            disp_unraveled.max(-1)[0]]).numpy()
+
         loss = w1*loss1 + w2*loss2 + w3*loss3
         losses.update([loss, loss1, loss2])
 
         print('valid: Time {} Loss {}'.format(batch_time, losses))
-
+    tb_writer.add_histogram('disp_values', disp_values, epoch)
     return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss']
 
 @torch.no_grad()
