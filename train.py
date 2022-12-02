@@ -63,18 +63,18 @@ parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',   
 # parser.add_argument('--pretrained-exppose', dest='pretrained_exp_pose', default=None, metavar='PATH',
 #                     help='path to pre-trained Exp Pose net model')
 parser.add_argument('--seed', default=0, type=int, help='seed for random functions, and network initialization')    #
-# parser.add_argument('--log-summary', default='progress_log_summary.csv', metavar='PATH',
-#                     help='csv where to save per-epoch train and valid stats')
-# parser.add_argument('--log-full', default='progress_log_full.csv', metavar='PATH',
-#                     help='csv where to save per-gradient descent train stats')
+parser.add_argument('--log-summary', default='progress_log_summary.csv', metavar='PATH',
+                    help='csv where to save per-epoch train and valid stats')
+parser.add_argument('--log-full', default='progress_log_full.csv', metavar='PATH',
+                    help='csv where to save per-gradient descent train stats')
 parser.add_argument('-p', '--photo-loss-weight', type=float, help='weight for photometric loss', metavar='W', default=1)
 parser.add_argument('-m', '--mask-loss-weight', type=float, help='weight for explainabilty mask loss', metavar='W', default=0)
 parser.add_argument('-s', '--smooth-loss-weight', type=float, help='weight for disparity smoothness loss', metavar='W', default=0.1)
 # parser.add_argument('--log-output', action='store_true', help='will log dispnet outputs and warped imgs at validation step')
-# parser.add_argument('-f', '--training-output-freq', type=int,
-#                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
-#                          'if 0, will not output',
-#                     metavar='N', default=0)
+parser.add_argument('-f', '--training-output-freq', type=int,
+                    help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
+                         'if 0, will not output',
+                    metavar='N', default=0)
 
 if torch.cuda.is_available(): device = torch.device("cuda")
 else: device = torch.device("cpu")
