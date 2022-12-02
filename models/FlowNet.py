@@ -1,5 +1,5 @@
 '''
-    FlowNet Architecture
+    FlowNet Architecture??
     Reused parts of code from:
     1. https://github.com/yijie0710/GeoNet_pytorch
     2. https://github.com/ClementPinard/SfmLearner-Pytorch
@@ -8,7 +8,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.nn.init import xavier_normal_, zeros_
+from torch.nn.init import xavier_normal_, zeros_
 from model_utils import upconv, conv, downsample_conv, resize_like
 
 def get_flow(in_chnls):
@@ -76,7 +76,7 @@ class FlowNet(nn.Module):
         out_iconv7 = self.iconv7(concat7)
 
         out_upconv6 = resize_like(self.upconv6(out_iconv7), out_conv5)
-        concat6 = torch.cat((out_upconv6, out_conv5),1)
+        concat6 = torch.cat((out_upconv6, out_conv5), 1)
         out_iconv6 = self.iconv6(concat6)
 
         out_upconv5 = resize_like(self.upconv5(out_iconv6), out_conv4)
@@ -84,30 +84,30 @@ class FlowNet(nn.Module):
         out_iconv5 = self.iconv5(concat5)
 
         out_upconv4 = resize_like(self.upconv4(out_iconv5), out_conv3)
-        concat4 = torch.cat((out_upconv4, out_conv3),1)
+        concat4 = torch.cat((out_upconv4, out_conv3), 1)
         out_iconv4 = self.iconv4(concat4)
-        out_flow4 = self.alpha*self.flow4(out_iconv4)+self.beta
+        out_flow4 = self.alpha * self.flow4(out_iconv4) + self.beta
 
         out_upconv3 = resize_like(self.upconv3(out_iconv4), out_conv2)
         out_upflow4 = resize_like(F.interpolate(
             out_flow4, scale_factor=2, mode='bilinear', align_corners=False), out_conv2)
         concat3 = torch.cat((out_upconv3, out_conv2, out_upflow4), 1)
         out_iconv3 = self.iconv3(concat3)
-        out_flow3 = self.alpha*self.flow3(out_iconv3)+self.beta
+        out_flow3 = self.alpha * self.flow3(out_iconv3) + self.beta
 
         out_upconv2 = resize_like(self.upconv2(out_iconv3), out_conv1)
         out_upflow3 = resize_like(F.interpolate(
             out_flow3, scale_factor=2, mode='bilinear', align_corners=False), out_conv1)
         concat2 = torch.cat((out_upconv2, out_conv1, out_upflow3), 1)
         out_iconv2 = self.iconv2(concat2)
-        out_flow2 = self.alpha*self.flow2(out_iconv2)+self.beta
+        out_flow2 = self.alpha * self.flow2(out_iconv2) + self.beta
 
         out_upconv1 = resize_like(self.upconv1(out_iconv2), x)
         out_upflow2 = resize_like(F.interpolate(
             out_flow2, scale_factor=2, mode='bilinear', align_corners=False), x)
         concat1 = torch.cat((out_upconv1, out_upflow2), 1)
         out_iconv1 = self.iconv1(concat1) 
-        out_flow1 = self.alpha*self.flow1(out_iconv1)+self.beta
+        out_flow1 = self.alpha * self.flow1(out_iconv1) + self.beta
 
         return out_flow1, out_flow2, out_flow3, out_flow4
 
