@@ -1,3 +1,8 @@
+'''
+    Pose Prediction Architecture
+    Reused parts of code from https://github.com/ClementPinard/SfmLearner-Pytorch
+'''
+
 import torch
 import torch.nn as nn
 from torch import sigmoid

@@ -1,12 +1,14 @@
 '''
     Single-View Depth Prediction Model Architecture
     DispNet Architecture
+    Reused parts of code from https://github.com/ClementPinard/SfmLearner-Pytorch
 '''
 
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from torch.nn.init import xavier_uniform_, zeros_
+from model_utils import upconv, conv, downsample_conv, resize_like
 
 # Checks if cuda can be used otherwwise uses cpu
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -50,12 +52,12 @@ def predict_disp(in_planes):
         nn.Sigmoid()
     )
 
-def crop_like(input, ref):
-    '''
-        Match W and H of input image to reference image
-    '''
-    assert(input.size(2) >= ref.size(2) and input.size(3) >= ref.size(3))
-    return input[:, :, :ref.size(2), :ref.size(3)]
+# def crop_like(input, ref):
+#     '''
+#         Match W and H of input image to reference image
+#     '''
+#     assert(input.size(2) >= ref.size(2) and input.size(3) >= ref.size(3))
+#     return input[:, :, :ref.size(2), :ref.size(3)]
 
 class DispNetS(nn.Module):
     def __init__(self, alpha = 10, beta = 0.01):
@@ -107,37 +109,37 @@ class DispNetS(nn.Module):
         out_conv6 = self.conv6(out_conv5)
         out_conv7 = self.conv7(out_conv6)
 
-        out_upconv7 = crop_like(self.upconv7(out_conv7), out_conv6)
+        out_upconv7 = resize_like(self.upconv7(out_conv7), out_conv6)
         concat7 = torch.cat((out_upconv7, out_conv6), 1)
         out_iconv7 = self.iconv7(concat7)
 
-        out_upconv6 = crop_like(self.upconv6(out_iconv7), out_conv5)
+        out_upconv6 = resize_like(self.upconv6(out_iconv7), out_conv5)
         concat6 = torch.cat((out_upconv6, out_conv5), 1)
         out_iconv6 = self.iconv6(concat6)
 
-        out_upconv5 = crop_like(self.upconv5(out_iconv6), out_conv4)
+        out_upconv5 = resize_like(self.upconv5(out_iconv6), out_conv4)
         concat5 = torch.cat((out_upconv5, out_conv4), 1)
         out_iconv5 = self.iconv5(concat5)
 
-        out_upconv4 = crop_like(self.upconv4(out_iconv5), out_conv3)
+        out_upconv4 = resize_like(self.upconv4(out_iconv5), out_conv3)
         concat4 = torch.cat((out_upconv4, out_conv3), 1)
         out_iconv4 = self.iconv4(concat4)
         disp4 = self.alpha * self.predict_disp4(out_iconv4) + self.beta
 
-        out_upconv3 = crop_like(self.upconv3(out_iconv4), out_conv2)
-        disp4_up = crop_like(F.interpolate(disp4, scale_factor=2, mode='bilinear', align_corners=False), out_conv2)
+        out_upconv3 = resize_like(self.upconv3(out_iconv4), out_conv2)
+        disp4_up = resize_like(F.interpolate(disp4, scale_factor=2, mode='bilinear', align_corners=False), out_conv2)
         concat3 = torch.cat((out_upconv3, out_conv2, disp4_up), 1)
         out_iconv3 = self.iconv3(concat3)
         disp3 = self.alpha * self.predict_disp3(out_iconv3) + self.beta
 
-        out_upconv2 = crop_like(self.upconv2(out_iconv3), out_conv1)
-        disp3_up = crop_like(F.interpolate(disp3, scale_factor=2, mode='bilinear', align_corners=False), out_conv1)
+        out_upconv2 = resize_like(self.upconv2(out_iconv3), out_conv1)
+        disp3_up = resize_like(F.interpolate(disp3, scale_factor=2, mode='bilinear', align_corners=False), out_conv1)
         concat2 = torch.cat((out_upconv2, out_conv1, disp3_up), 1)
         out_iconv2 = self.iconv2(concat2)
         disp2 = self.alpha * self.predict_disp2(out_iconv2) + self.beta
 
-        out_upconv1 = crop_like(self.upconv1(out_iconv2), x)
-        disp2_up = crop_like(F.interpolate(disp2, scale_factor=2, mode='bilinear', align_corners=False), x)
+        out_upconv1 = resize_like(self.upconv1(out_iconv2), x)
+        disp2_up = resize_like(F.interpolate(disp2, scale_factor=2, mode='bilinear', align_corners=False), x)
         concat1 = torch.cat((out_upconv1, disp2_up), 1)
         out_iconv1 = self.iconv1(concat1)
         disp1 = self.alpha * self.predict_disp1(out_iconv1) + self.beta
