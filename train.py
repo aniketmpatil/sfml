@@ -98,6 +98,7 @@ def main():
     ## TensorBoard Writer
     tb_writer = SummaryWriter(args.save_path)
 
+    # Custom transforms for train and validation sets
     normalize = cust_trans.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     train_transform = cust_trans.Compose([
         cust_trans.RandomHorizontalFlip(),
@@ -110,6 +111,7 @@ def main():
         normalize
     ])
 
+    # Get sequences from train list
     train_set = SequenceFolder(
         args.data,
         transform=train_transform,
@@ -118,6 +120,7 @@ def main():
         sequence_length=args.sequence_length
     )
 
+    # Get sequences from validation list
     if args.with_pose and args.with_gt:
         val_set = val_set = ValidationSetWithPose(
             args.data,
@@ -125,7 +128,7 @@ def main():
             transform=valid_transform
         )
     else:
-        val_set = SequenceFolder(                   ## Check other conditions like when GT is available
+        val_set = SequenceFolder(
             args.data,
             transform=valid_transform,
             seed=args.seed,
@@ -192,8 +195,8 @@ def main():
 
         train_loss = train(args, train_loader, disp_net, pose_exp_net, optimizer, args.epoch_size, epoch, tb_writer)
 
-        # errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
         if args.with_gt and args.with_pose:
+            # Validating using pose GT and generated depth from velodyne points
             errors, error_names = validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
         else:
             errors, error_names = validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer)
@@ -297,7 +300,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
     global device
     print("Validating without GT")
     batch_time = AverageMeter()
-    losses = AverageMeter(i=3, precision=4)
+    losses = AverageMeter(i=4, precision=4)
 
     log_outputs = sample_nb_to_log > 0
     # Output the logs throughout the whole dataset
@@ -349,11 +352,11 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
                                                             disp_unraveled.max(-1)[0]]).numpy()
 
         loss = w1*loss1 + w2*loss2 + w3*loss3
-        losses.update([loss, loss1, loss2])
+        losses.update([loss, loss1, loss2, loss3])
 
         print('valid: Time {} Loss {}'.format(batch_time, losses))
     tb_writer.add_histogram('disp_values', disp_values, epoch)
-    return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss']
+    return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss', 'Smoothness Loss']
 
 @torch.no_grad()
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
