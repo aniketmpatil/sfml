@@ -12,6 +12,7 @@ from models.model_utils import upconv, conv, downsample_conv, resize_like
 
 # Checks if cuda can be used otherwwise uses cpu
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+from IPython import embed
 
 def downsample_conv(in_planes, out_planes, kernel_size=3):
     '''
@@ -43,12 +44,12 @@ def upconv(in_planes, out_planes):
         nn.ReLU(inplace=True)
     )
 
-def predict_disp(in_planes):
+def predict_disp_and_uncertainity(in_planes):
     '''
         Prediction Network
     '''
     return nn.Sequential(
-        nn.Conv2d(in_planes, 1, kernel_size=3, padding=1),
+        nn.Conv2d(in_planes, 2, kernel_size=3, padding=1),
         nn.Sigmoid()
     )
 
@@ -95,10 +96,10 @@ class DispNetS(nn.Module):
         self.iconv2 = conv(1 + upconv_planes[5] + conv_planes[0], upconv_planes[5])
         self.iconv1 = conv(1 + upconv_planes[6], upconv_planes[6])
 
-        self.predict_disp4 = predict_disp(upconv_planes[3])     ## Why only Sigmoid??
-        self.predict_disp3 = predict_disp(upconv_planes[4])
-        self.predict_disp2 = predict_disp(upconv_planes[5])
-        self.predict_disp1 = predict_disp(upconv_planes[6])
+        self.predict_disp4 = predict_disp_and_uncertainity(upconv_planes[3])     ## Why only Sigmoid??
+        self.predict_disp3 = predict_disp_and_uncertainity(upconv_planes[4])
+        self.predict_disp2 = predict_disp_and_uncertainity(upconv_planes[5])
+        self.predict_disp1 = predict_disp_and_uncertainity(upconv_planes[6])
 
     def forward(self, x):
         out_conv1 = self.conv1(x)
@@ -124,30 +125,42 @@ class DispNetS(nn.Module):
         out_upconv4 = resize_like(self.upconv4(out_iconv5), out_conv3)
         concat4 = torch.cat((out_upconv4, out_conv3), 1)
         out_iconv4 = self.iconv4(concat4)
-        disp4 = self.alpha * self.predict_disp4(out_iconv4) + self.beta
+        op_layer_4 = self.alpha * self.predict_disp4(out_iconv4) + self.beta
+        disp4 = op_layer_4[:, :1, :, :]
 
+        # print("Pred_Disp output shape:", op_layer_4.shape)
+        # embed()
         out_upconv3 = resize_like(self.upconv3(out_iconv4), out_conv2)
         disp4_up = resize_like(F.interpolate(disp4, scale_factor=2, mode='bilinear', align_corners=False), out_conv2)
         concat3 = torch.cat((out_upconv3, out_conv2, disp4_up), 1)
         out_iconv3 = self.iconv3(concat3)
-        disp3 = self.alpha * self.predict_disp3(out_iconv3) + self.beta
+        op_layer_3 = self.alpha * self.predict_disp3(out_iconv3) + self.beta
+        disp3 = op_layer_3[:, :1, :, :]
 
         out_upconv2 = resize_like(self.upconv2(out_iconv3), out_conv1)
         disp3_up = resize_like(F.interpolate(disp3, scale_factor=2, mode='bilinear', align_corners=False), out_conv1)
         concat2 = torch.cat((out_upconv2, out_conv1, disp3_up), 1)
         out_iconv2 = self.iconv2(concat2)
-        disp2 = self.alpha * self.predict_disp2(out_iconv2) + self.beta
+        op_layer_2 = self.alpha * self.predict_disp2(out_iconv2) + self.beta
+        disp2 = op_layer_2[:, :1, :, :]
 
         out_upconv1 = resize_like(self.upconv1(out_iconv2), x)
         disp2_up = resize_like(F.interpolate(disp2, scale_factor=2, mode='bilinear', align_corners=False), x)
         concat1 = torch.cat((out_upconv1, disp2_up), 1)
         out_iconv1 = self.iconv1(concat1)
-        disp1 = self.alpha * self.predict_disp1(out_iconv1) + self.beta
+        op_layer_1 = self.alpha * self.predict_disp1(out_iconv1) + self.beta
+        disp1 = op_layer_1[:, :1, :, :]
+
+        uncert1 = op_layer_1[:, 1:, :, :]
+        uncert2 = op_layer_2[:, 1:, :, :]
+        uncert3 = op_layer_3[:, 1:, :, :]
+        uncert4 = op_layer_4[:, 1:, :, :]
+        # embed()
 
         if self.training:
-            return disp1, disp2, disp3, disp4
+            return [disp1, disp2, disp3, disp4], [uncert1, uncert2, uncert3, uncert4]
         else:
-            return disp1
+            return disp1, uncert1
 
     def init_weights(self):
         for m in self.modules():
