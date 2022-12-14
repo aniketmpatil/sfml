@@ -1,3 +1,4 @@
+from inverse_warp import pose_vec2mat
 import torch
 import time
 import argparse
@@ -12,7 +13,7 @@ import models
 import csv
 import numpy as np
 from utils import save_checkpoint, save_path_formatter, log_output_tensorboard, tensor2array
-from loss_functions import smooth_loss, explainability_loss, photometric_reconstruction_loss
+from loss_functions import compute_depth_errors, smooth_loss, explainability_loss, photometric_reconstruction_loss, compute_pose_error
 from logger import AverageMeter
 # import models.DispNetS as DispNetS
 # import models.PoseExpNet as PoseExpNet
@@ -250,7 +251,10 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         disparities = disp_net(tgt_img)
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
+        # embed()
 
+        assert((w2> 0) == args.uncert, "Choose between Uncertainity and Explainability")
+        
         # COMPUTE LOSSES
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, pose,
@@ -359,12 +363,18 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
     return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss', 'Smoothness Loss']
 
 @torch.no_grad()
-def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
+def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=3):
     global device
-    depth_error_names = ['abs_diff', 'abs_rel', 'sq_rel', 'a1', 'a2', 'a3']
+    batch_time = AverageMeter()
+    depth_error_names = ['abs_rel', 'sq_rel']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
     pose_error_names = ['ATE', 'RTE']
     pose_errors = AverageMeter(i=2, precision=4)
+    log_outputs = sample_nb_to_log > 0
+
+    batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
+    poses_values = np.zeros(((len(val_loader)-1) * args.batch_size * (args.sequence_length-1), 6))
+    disp_values = np.zeros(((len(val_loader)-1) * args.batch_size * 3))
 
     disp_net.eval()
     pose_exp_net.eval()
@@ -386,6 +396,53 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_wr
         print("reordered output poses: ", output_poses[:, :gt_poses.shape[1]//2])
         print("Size of output_pose: ", output_poses.size(), gt_poses.size())
 
+        reordered_output_poses = torch.cat([output_poses[:, :gt_poses.shape[1]//2],
+                                            torch.zeros(b, 1, 6).to(output_poses),
+                                            output_poses[:, gt_poses.shape[1]//2:]], dim=1)
+
+        unravelled_poses = reordered_output_poses.reshape(-1, 6)
+        unravelled_matrices = pose_vec2mat(unravelled_poses, rotation_mode=args.rotation_mode)
+        inv_transform_matrices = unravelled_matrices.reshape(b, -1, 3, 4)
+
+        rot_matrices = inv_transform_matrices[..., :3].transpose(-2, -1)
+        tr_vectors = -rot_matrices @ inv_transform_matrices[..., -1:]
+
+        transform_matrices = torch.cat([rot_matrices, tr_vectors], axis=-1)
+
+        first_inv_transform = inv_transform_matrices.reshape(b, -1, 3, 4)[:, :1]
+        final_poses = first_inv_transform[..., :3] @ transform_matrices
+        final_poses[..., -1:] += first_inv_transform[..., -1:]
+        final_poses = final_poses.reshape(b, -1, 3, 4)
+
+        if log_outputs and i in batches_to_log:  # log first output of wanted batches
+            index = batches_to_log.index(i)
+            if epoch == 0:
+                for j, ref in enumerate(ref_imgs):
+                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(tgt_img[0]), 0)
+                    tb_writer.add_image('val Input {}/{}'.format(j, index), tensor2array(ref[0]), 1)
+
+            log_output_tensorboard(tb_writer, 'val', index, '', epoch, output_depth, output_disp, None, None, explainability_mask)
+
+        if log_outputs and i < len(val_loader)-1:
+            step = args.batch_size*(args.sequence_length-1)
+            poses_values[i * step:(i+1) * step] = output_poses.cpu().view(-1, 6).numpy()
+            step = args.batch_size * 3
+            disp_unraveled = output_disp.cpu().view(args.batch_size, -1)
+            disp_values[i * step:(i+1) * step] = torch.cat([disp_unraveled.min(-1)[0],
+                                                            disp_unraveled.median(-1)[0],
+                                                            disp_unraveled.max(-1)[0]]).numpy()
+
+        depth_errors.update(compute_depth_errors(gt_depth, output_depth[:, 0]))
+        pose_errors.update(compute_pose_error(gt_poses, final_poses))
+
+        if i % args.print_freq == 0:
+            logger.valid_writer.write(
+                'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
+                                                                                       depth_errors.val[0],
+                                                                                       depth_errors.avg[0],
+                                                                                       pose_errors.val[0],
+                                                                                       pose_errors.avg[0]))
+        
     print("Return validation output")
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
 
