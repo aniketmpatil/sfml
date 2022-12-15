@@ -2,13 +2,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
+from IPython import embed
 
 from inverse_warp import inverse_warp
 
 def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics, depth, 
-                                    explainability_mask, pose, 
+                                    explainability_mask, pose, uncert, uncert_loss_epsilon=0.001, use_uncert=False,
                                     rotation_mode='euler', padding_mode='zeros'):
-    def one_scale(depth, explainability_mask):
+    def one_scale(depth, explainability_mask, uncertainity):
+        # embed()
         assert(pose.size(1) == len(ref_imgs))
         assert(explainability_mask is None or depth.size()[2:] == explainability_mask.size()[2:])
     
@@ -38,12 +41,19 @@ def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics, depth,
                                         intrinsics_scaled, rotation_mode, padding_mode)
             ## valid_points is a tensor that contains bool values of size (4, 128, 416) to (4, 16, 52)
             diff = (tgt_img_scaled - ref_img_warped) * valid_points.unsqueeze(1).float()
-
+            # embed()
             if explainability_mask is not None:
                 diff = diff * explainability_mask[:,i:i+1].expand_as(diff)  #???
-
-            reconstruction_loss += diff.abs().mean()
-
+                reconstruction_loss += diff.abs().mean()
+            elif use_uncert:
+                diff = diff / (torch.log(1 + torch.exp(uncertainity + uncert_loss_epsilon)))
+                diff_mean = diff.abs().mean()
+                reg_term = torch.log(1 + torch.exp(uncertainity)).abs().mean()
+                reconstruction_loss += diff_mean + reg_term
+                # print("Index: ", i, " Errors: ", diff_mean, " Regularization term: ", reg_term)
+            else:
+                reconstruction_loss += diff.abs().mean()
+            # embed()
             warped_imgs.append(ref_img_warped[0])
             diff_maps.append(diff[0])
         return reconstruction_loss, warped_imgs, diff_maps
@@ -53,11 +63,17 @@ def photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics, depth,
         explainability_mask = [explainability_mask]
     if type(depth) not in [list, tuple]:
         depth = [depth]
-    
+    if type(uncert) not in [list, tuple]:
+        uncert = [uncert]
+    # embed()
     total_loss = 0
-    for d, mask in zip(depth, explainability_mask):
-        loss, warped, diff = one_scale(d, mask)
-        total_loss += loss
+    uncert_level_coeff = torch.ones(len(uncert))
+    for d, mask, u, u_coeff in zip(depth, explainability_mask, uncert, uncert_level_coeff):
+        loss, warped, diff = one_scale(d, mask, u)
+        if use_uncert:
+            total_loss += u_coeff * loss
+        else:
+            total_loss += loss
         warped_results.append(warped)
         diff_results.append(diff)
     return total_loss, warped_results, diff_results

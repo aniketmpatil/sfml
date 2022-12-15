@@ -6,6 +6,7 @@ import torch.optim
 import torch.utils.data
 import torch.nn
 
+from IPython import embed
 from datasets.sequence_folders import SequenceFolder, ValidationSetWithPose
 import custom_transforms as cust_trans
 import models
@@ -75,6 +76,8 @@ parser.add_argument('-f', '--training-output-freq', type=int,
                     help='frequence for outputting dispnet outputs and warped imgs at training for all scales. '
                          'if 0, will not output',
                     metavar='N', default=0)
+parser.add_argument('-eps', '--uncert-loss-epsilon', type=float, help='epsilon for softplus function', metavar='EP', default=0.001)
+parser.add_argument('--uncert', action='store_true', help='use uncertainity based loss function for photometric loss')
 
 if torch.cuda.is_available(): device = torch.device("cuda")
 else: device = torch.device("cpu")
@@ -246,7 +249,9 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         # print("tgt_img: ", tgt_img.size())
 
         # Forward pass
-        disparities = disp_net(tgt_img)
+        disparities, uncertainities = disp_net(tgt_img)
+        # disparities = outputs[:, :1, :, :]
+        # uncertainities = outputs[:, 1:, :, :]
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
         # embed()
@@ -255,7 +260,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         
         # COMPUTE LOSSES
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
-                                                               depth, explainability_mask, pose,
+                                                               depth, explainability_mask, pose, uncertainities, args.uncert_loss_epsilon, args.uncert, 
                                                                args.rotation_mode, args.padding_mode)
         if w2 > 0:
             loss_2 = explainability_loss(explainability_mask)
@@ -324,15 +329,21 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
         intrinsics = intrinsics.to(device)
         intrinsics_inv = intrinsics_inv.to(device)
 
-        disp = disp_net(tgt_img)
+        # embed()
+        disp, uncert = disp_net(tgt_img)
+        # disp = disp_uncert[:, :1, :, :]
+        # uncert = disp_uncert[:, 1:, :, :]
         depth = 1/disp
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
 
         loss1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs,
                                                                intrinsics, depth,
-                                                               explainability_mask, pose,
+                                                               explainability_mask, pose, uncert, args.uncert_loss_epsilon, args.uncert, 
                                                                args.rotation_mode, args.padding_mode)
-        loss2 = explainability_loss(explainability_mask).item()
+        if w2 > 0:
+            loss2 = explainability_loss(explainability_mask).item()
+        else:
+            loss2 = 0
         loss3 = smooth_loss(depth).item()
 
         if log_outputs and i in batches_to_log:  # log first output of wanted batches
@@ -364,6 +375,7 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
     # batch_time = AverageMeter()
+    # batch_time = AverageMeter()
     depth_error_names = ['abs_rel', 'sq_rel']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
     pose_error_names = ['ATE']
@@ -387,7 +399,9 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_wr
         b = tgt_img.shape[0]
 
         # Compute Output
-        output_disp = disp_net(tgt_img)
+        output_disp, output_uncert = disp_net(tgt_img)
+        # output_disp = disp_uncert[:, :1, :, :]
+        # output_uncert = disp_uncert[:, 1:, :, :]
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
 
@@ -440,6 +454,12 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_wr
                                                                                        depth_errors.avg[1],
                                                                                        pose_errors.val[0],
                                                                                        pose_errors.avg[0]))
+            # logger.valid_writer.write(
+            #     'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
+            #                                                                            depth_errors.val[0],
+            #                                                                            depth_errors.avg[0],
+            #                                                                            pose_errors.val[0],
+            #                                                                           pose_errors.avg[0]))
         
     print("Return validation output")
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
