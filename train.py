@@ -373,7 +373,9 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
 
 @torch.no_grad()
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
+def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
+    # batch_time = AverageMeter()
     # batch_time = AverageMeter()
     depth_error_names = ['abs_rel', 'sq_rel']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
@@ -453,6 +455,12 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_wr
                                                                                        depth_errors.avg[1],
                                                                                        pose_errors.val[0],
                                                                                        pose_errors.avg[0]))
+            # logger.valid_writer.write(
+            #     'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
+            #                                                                            depth_errors.val[0],
+            #                                                                            depth_errors.avg[0],
+            #                                                                            pose_errors.val[0],
+            #                                                                           pose_errors.avg[0]))
         
     print("Return validation output")
     return depth_errors.avg + pose_errors.avg, depth_error_names + pose_error_names
