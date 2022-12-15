@@ -373,7 +373,6 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
 
 @torch.no_grad()
 def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
-def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
     # batch_time = AverageMeter()
     # batch_time = AverageMeter()
