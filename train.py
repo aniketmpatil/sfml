@@ -255,12 +255,9 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         depth = [1/disp for disp in disparities]
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
         # embed()
-<<<<<<< HEAD
 
         # assert((w2> 0.0) == args.uncert, "Choose between Uncertainity and Explainability")
         
-=======
->>>>>>> added loss function using softplus
         # COMPUTE LOSSES
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
                                                                depth, explainability_mask, pose, uncertainities, args.uncert_loss_epsilon, args.uncert, 
