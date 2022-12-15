@@ -1,4 +1,3 @@
-from inverse_warp import pose_vec2mat
 import torch
 import time
 import argparse
@@ -12,12 +11,12 @@ import custom_transforms as cust_trans
 import models
 import csv
 import numpy as np
+from inverse_warp import pose_vec2mat
 from utils import save_checkpoint, save_path_formatter, log_output_tensorboard, tensor2array
 from loss_functions import compute_depth_errors, smooth_loss, explainability_loss, photometric_reconstruction_loss, compute_pose_error
 from logger import AverageMeter
-# import models.DispNetS as DispNetS
-# import models.PoseExpNet as PoseExpNet
 from tensorboardX import SummaryWriter
+from IPython import embed
 
 parser = argparse.ArgumentParser(description='Structure from Motion Learner training on KITTI and CityScapes Dataset',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -234,7 +233,6 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
     pose_exp_net.train()
 
     end = time.time()
-    avg_loss = 0
 
     ## FOR LOOP HERE over train_loader
     for i, (tgt_img, ref_imgs, intrinsics, _) in enumerate(train_loader):
@@ -253,7 +251,7 @@ def train(args, train_loader, disp_net, pose_exp_net, optimizer, epoch_size, epo
         explainability_mask, pose = pose_exp_net(tgt_img, ref_imgs)
         # embed()
 
-        assert((w2> 0) == args.uncert, "Choose between Uncertainity and Explainability")
+        # assert((w2> 0.0) == args.uncert, "Choose between Uncertainity and Explainability")
         
         # COMPUTE LOSSES
         loss_1, warped, diff = photometric_reconstruction_loss(tgt_img, ref_imgs, intrinsics,
@@ -363,13 +361,13 @@ def validate_without_gt(args, val_loader, disp_net, pose_exp_net, epoch, tb_writ
     return losses.avg, ['Validation Total loss', 'Validation Photo loss', 'Validation Exp loss', 'Smoothness Loss']
 
 @torch.no_grad()
-def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logger, tb_writer, sample_nb_to_log=3):
+def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, tb_writer, sample_nb_to_log=3):
     global device
-    batch_time = AverageMeter()
+    # batch_time = AverageMeter()
     depth_error_names = ['abs_rel', 'sq_rel']
     depth_errors = AverageMeter(i=len(depth_error_names), precision=4)
-    pose_error_names = ['ATE', 'RTE']
-    pose_errors = AverageMeter(i=2, precision=4)
+    pose_error_names = ['ATE']
+    pose_errors = AverageMeter(i=1, precision=4)
     log_outputs = sample_nb_to_log > 0
 
     batches_to_log = list(np.linspace(0, len(val_loader), sample_nb_to_log).astype(int))
@@ -393,8 +391,8 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         output_depth = 1/output_disp
         explainability_mask, output_poses = pose_exp_net(tgt_img, ref_imgs)
 
-        print("reordered output poses: ", output_poses[:, :gt_poses.shape[1]//2])
-        print("Size of output_pose: ", output_poses.size(), gt_poses.size())
+        # print("reordered output poses: ", output_poses[:, :gt_poses.shape[1]//2])
+        # print("Size of output_pose: ", output_poses.size(), gt_poses.size())
 
         reordered_output_poses = torch.cat([output_poses[:, :gt_poses.shape[1]//2],
                                             torch.zeros(b, 1, 6).to(output_poses),
@@ -436,10 +434,10 @@ def validate_with_gt_pose(args, val_loader, disp_net, pose_exp_net, epoch, logge
         pose_errors.update(compute_pose_error(gt_poses, final_poses))
 
         if i % args.print_freq == 0:
-            logger.valid_writer.write(
-                'valid: Time {} Abs Error {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(batch_time,
-                                                                                       depth_errors.val[0],
+            print('valid: Abs Rel Error {:.4f} ({:.4f}), Sq Rel Error: {:.4f} ({:.4f}), ATE {:.4f} ({:.4f})'.format(depth_errors.val[0],
                                                                                        depth_errors.avg[0],
+                                                                                       depth_errors.val[1],
+                                                                                       depth_errors.avg[1],
                                                                                        pose_errors.val[0],
                                                                                        pose_errors.avg[0]))
         

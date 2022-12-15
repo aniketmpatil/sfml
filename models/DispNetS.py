@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from torch.nn.init import xavier_uniform_, zeros_
-from model_utils import upconv, conv, downsample_conv, resize_like
+from models.model_utils import upconv, conv, downsample_conv, resize_like
 
 # Checks if cuda can be used otherwwise uses cpu
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")

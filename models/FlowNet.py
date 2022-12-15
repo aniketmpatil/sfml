@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.init import xavier_normal_, zeros_
-from model_utils import upconv, conv, downsample_conv, resize_like
+from models.model_utils import upconv, conv, downsample_conv, resize_like
 
 def get_flow(in_chnls):
     return nn.Conv2d(in_chnls,2,kernel_size=1,padding=0)
