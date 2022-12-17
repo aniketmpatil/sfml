@@ -1,0 +1,45 @@
+
+ckpt_path: test
+
+
+data_workers: 6
+data: /home/aniket/WPI/DR_3DOD/kitti_dump
+sequence_length: 3
+img_height: 128
+img_width: 416 
+
+# Training
+ckpt_dir: saved_models/
+# ckpt_dir: /home/yijie/exper/geonet/20181215/ckpt
+# ckpt_path: /home/yijie/exper/geonet/20181215/ckpt/rigid_0
+ckpt_path: saved_models/dispnet_model_best.pth.tar
+log_dir: saved_models/logs
+learning_rate: 0.0002
+iter: 200000
+cuda: False
+batch_size: 4
+save_ckpt_iter: 200
+save_log_iter: 200
+epochs: 30
+epoch_size: 100
+seed: 8964
+dispnet_encoder: 'VGG-16'
+disparity_scale_normalize: False
+momentum: 0.9
+beta: 0.999
+weight_decay: 0.9
+epoch: 1000
+flow_scale_factor: 0.1
+num_scales: 4
+
+alpha_recon_image: 0.85
+lambda_rw: 1
+lambda_ds: 0.5
+lambda_fw: 1
+lambda_fs: 0.2
+lambda_gc: 0.2
+geometric_consistency_alpha: 1
+geometric_consistency_beta: 1
+
+# Inference
+result_dir:
