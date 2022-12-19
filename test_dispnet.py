@@ -44,8 +44,9 @@ def main():
                                use_gps=False)
 
     errors = np.zeros((2, 3, len(test_files)), np.float32)
-    output_dir = Path(args.output_dir)
-    output_dir.makedirs_p()
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir)
+        output_dir.makedirs_p()
     for j, sample in enumerate(tqdm(framework)):
         tgt_img = sample['tgt']
 
