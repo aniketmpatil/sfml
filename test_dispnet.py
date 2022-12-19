@@ -19,6 +19,8 @@ parser.add_argument("--output-dir", default=None, type=str, help="Output directo
 
 MIN_DEPTH = 1e-3
 MAX_DEPTH = 80
+IMAGE_HEIGHT = 128
+IMAGE_WIDTH = 416
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -38,10 +40,10 @@ def main():
     with open(args.dataset_list, 'r') as f:
         test_files = list(f.read().splitlines())
     framework = test_framework(args.dataset_dir, test_files, seq_length,
-                               args.min_depth, args.max_depth,
-                               use_gps=args.gps)
+                               MIN_DEPTH, MAX_DEPTH,
+                               use_gps=False)
 
-    errors = np.zeros((2, 9, len(test_files)), np.float32)
+    errors = np.zeros((2, 3, len(test_files)), np.float32)
     output_dir = Path(args.output_dir)
     output_dir.makedirs_p()
     for j, sample in enumerate(tqdm(framework)):
@@ -50,9 +52,9 @@ def main():
         ref_imgs = sample['ref']
 
         h,w,_ = tgt_img.shape
-        if (not args.no_resize) and (h != args.img_height or w != args.img_width):
-            tgt_img = imresize(tgt_img, (args.img_height, args.img_width)).astype(np.float32)
-            ref_imgs = [imresize(img, (args.img_height, args.img_width)).astype(np.float32) for img in ref_imgs]
+        if (h != IMAGE_HEIGHT or w != IMAGE_WIDTH):
+            tgt_img = imresize(tgt_img, (IMAGE_HEIGHT, IMAGE_WIDTH)).astype(np.float32)
+            ref_imgs = [imresize(img, (IMAGE_HEIGHT, IMAGE_WIDTH)).astype(np.float32) for img in ref_imgs]
 
         tgt_img = np.transpose(tgt_img, (2, 0, 1))
         ref_imgs = [np.transpose(img, (2,0,1)) for img in ref_imgs]
@@ -65,7 +67,7 @@ def main():
             img = ((img/255 - 0.5)/0.5).to(device)
             ref_imgs[i] = img
 
-        pred_disp = disp_net(tgt_img).cpu().numpy()[0,0]
+        pred_disp = disp_net(tgt_img)[0].cpu().numpy()[0,0]
 
         if args.output_dir is not None:
             if j == 0:
@@ -78,7 +80,7 @@ def main():
         pred_depth_zoomed = zoom(pred_depth,
                                  (gt_depth.shape[0]/pred_depth.shape[0],
                                   gt_depth.shape[1]/pred_depth.shape[1])
-                                 ).clip(args.min_depth, args.max_depth)
+                                 ).clip(MIN_DEPTH, MAX_DEPTH)
         if sample['mask'] is not None:
             pred_depth_zoomed = pred_depth_zoomed[sample['mask']]
             gt_depth = gt_depth[sample['mask']]
@@ -99,15 +101,15 @@ def main():
         errors[1,:,j] = compute_errors(gt_depth, pred_depth_zoomed*scale_factor)
 
     mean_errors = errors.mean(2)
-    error_names = ['abs_diff', 'abs_rel','sq_rel','rms','log_rms', 'abs_log', 'a1','a2','a3']
+    error_names = ['abs_rel','sq_rel','rms']
     if args.pretrained_posenet:
         print("Results with scale factor determined by PoseNet : ")
-        print("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format(*error_names))
-        print("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(*mean_errors[0]))
+        print("{:>10}, {:>10}, {:>10}".format(*error_names))
+        print("{:10.4f}, {:10.4f}, {:10.4f}".format(*mean_errors[0]))
 
     print("Results with scale factor determined by GT/prediction ratio (like the original paper) : ")
-    print("{:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}, {:>10}".format(*error_names))
-    print("{:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}, {:10.4f}".format(*mean_errors[1]))
+    print("{:>10}, {:>10}, {:>10}".format(*error_names))
+    print("{:10.4f}, {:10.4f}, {:10.4f}".format(*mean_errors[1]))
 
     if args.output_dir is not None:
         np.save(output_dir/'predictions.npy', predictions)
